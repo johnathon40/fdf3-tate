@@ -165,8 +165,8 @@ static void resetDefaults() {
         { 1610, 182, 628, 62, 536, 7, 520, 52 },      // score
         { 1605, 440, 633, 62, 8, 63, 520, 52 },       // max point
         { 1605, 506, 633, 62, 536, 63, 520, 52 },     // graze
-        { 1660, 26, 500, 62, 1064, 4, 368, 112 },     // difficulty: search area; the text is zoomed to fill the box
-        { 1610, 252, 628, 168, 8, 1802, 434, 116 },  // life + bomb, stacked like in the game
+        { 1660, 26, 500, 62, 1064, 4, 368, 112, 40, 24 }, // difficulty: search area; the text is zoomed to fill the box
+        { 1610, 252, 628, 168, 0, 1802, 442, 118, 72, 24 }, // life + bomb, stacked like in the game; long fade on the right into the background
         { 2440, 1376, 120, 64, 1260, 1824, 180, 96, 110, 48 }, // fps: extra dark area above/left, long fade that stops before the digits
     };
     EnterCriticalSection(&g_lock);
@@ -876,12 +876,29 @@ static int buildQuads(Vtx* v, bool layout, int* bgVerts) {
                     if (fy0 < r.sy) fy0 = r.sy;
                     if (fx1 > r.sx + r.sw) fx1 = r.sx + r.sw;
                     if (fy1 > r.sy + r.sh) fy1 = r.sy + r.sh;
-                    if (fx1 - fx0 > 8 && fy1 - fy0 > 8) { r.sx = fx0; r.sy = fy0; r.sw = fx1 - fx0; r.sh = fy1 - fy0; }
+                    if (fx1 - fx0 > 8 && fy1 - fy0 > 8) {
+                        // extra art around the text, so the edge fades don't dim the letters
+                        // (stays above the Hi-score label underneath the search area)
+                        float z0 = (float)r.dw / (fx1 - fx0);
+                        if ((float)r.dh / (fy1 - fy0) < z0) z0 = (float)r.dh / (fy1 - fy0);
+                        int padX = (int)((r.fx > 0 ? r.fx : g_featherX) / z0);
+                        int padY = (int)((r.fy > 0 ? r.fy : g_featherY) / z0);
+                        fx0 -= padX; fx1 += padX; fy0 -= padY; fy1 += padY;
+                        if (fx0 < r.sx - 60) fx0 = r.sx - 60;
+                        if (fx1 > r.sx + r.sw + 60) fx1 = r.sx + r.sw + 60;
+                        if (fy0 < 0) fy0 = 0;
+                        if (fy1 > r.sy + r.sh + 20) fy1 = r.sy + r.sh + 20;
+                        r.sx = fx0; r.sy = fy0; r.sw = fx1 - fx0; r.sh = fy1 - fy0;
+                    }
                 }
                 float z = (float)r.dw / r.sw;
                 if ((float)r.dh / r.sh < z) z = (float)r.dh / r.sh;
                 int w = (int)(r.sw * z), h = (int)(r.sh * z);
                 r.dx += (r.dw - w) / 2; r.dy += (r.dh - h) / 2; r.dw = w; r.dh = h;
+                // the zoomed box can end up anywhere inside its slot: always fade its bottom,
+                // other edges only skip the fade when they still sit on the layout's border
+                noBottom = false;
+                noTop = r.dy <= 2; noLeft = r.dx <= 2; noRight = r.dx + r.dw >= g_canW - 2;
             }
             n = pushQuad(v, n,
                          tx0 + tsx * r.sx / g_refW, ty0 + tsy * r.sy / g_refH,

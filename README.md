@@ -4,6 +4,7 @@ THRotator-style tate mod for Touhou Makuka Sai ~ Fantastic Danmaku Festival Part
 ## Installation
 1. Download the latest release zip.
 2. Extract the zip into the game folder, next to `THMHJ.exe` (Steam: right-click the game > Manage > Browse local files).
+3. Play with either Steam launch option: the normal one (`THMHJ.exe`) or Enable High Performance GPU (`THMHJhp.exe`). Both work.
 
 ### Linux / Proton
 Also set the Steam launch options to:
