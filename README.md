@@ -29,9 +29,6 @@ WINEDLLOVERRIDES="dxgi=n,b" %command%
 - CRTs / stretched screens: set **Screen shape** in the Alt+0 menu (Display) to the screen's real shape.
 - If something breaks, check `fdf3-tate-log.txt` in the game folder.
 
-## Notes
-- As of now, from my testing, SpecialK does not work with this mod. I may try to fix it in the future.
-
 ## Building
 Install mingw-w64, then run `./build.sh` (makes `dxgi.dll`):
 - Arch / Artix: `sudo pacman -S mingw-w64-gcc`
