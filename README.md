@@ -1,6 +1,8 @@
 # fdf3-tate
 THRotator-style tate mod for Touhou Makuka Sai ~ Fantastic Danmaku Festival Part III
 
+<img src="screenshots/tate.png" width="360" alt="fdf3-tate in tate mode">
+
 ## Installation
 1. Download the latest release zip.
 2. Extract the zip into the game folder, next to `THMHJ.exe` (Steam: right-click the game > Manage > Browse local files).
