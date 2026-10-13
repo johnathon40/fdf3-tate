@@ -207,7 +207,7 @@ static void* patchVT(void* obj, int idx, void* fn) {
 
 // ---------------------------------------------------------------- renderer state
 struct Vtx { float x, y, u, v, lx, ly, fx, fy; }; // pos, tex, local 0..1, feather (fraction of quad)
-static const int kMaxVerts = (kMaxRects + 2) * 6;
+static const int kMaxVerts = (kMaxRects + 4) * 6; // + background and the difficulty slot's extra slices
 
 static ID3D11Device*             g_dev;
 static ID3D11DeviceContext*      g_ctx;
@@ -696,12 +696,21 @@ static int  g_fitPending;            // frames until the copy can be read (0 = n
 static int  g_fitCopyW, g_fitCopyH, g_fitCopyX, g_fitCopyY, g_fitIdx;
 static float g_fitScale;             // real pixels per reference pixel at copy time
 static bool g_fitValid;
+static bool g_fitShown;              // text found since gameplay started; the box stays hidden until then
+static int  g_fitWait;               // frames since gameplay started, while the box is still hidden
 static int  g_fit[4];                // found text box, reference coords: x0, y0, x1, y1
 static int  g_fitCand[4], g_fitCandHits;
 
 static void fitScan(bool layout) {
     static int tick;
-    if (!layout || g_fitRect <= 0 || !detectFormatOk(g_srcFmt)) return;
+    if (!layout) {
+        // next gameplay may be another difficulty: find the text again before showing the box
+        if (g_fitShown) { EnterCriticalSection(&g_lock); g_fitShown = false; LeaveCriticalSection(&g_lock); }
+        g_fitCandHits = 0;
+        g_fitWait = 0;
+        return;
+    }
+    if (g_fitRect <= 0 || !detectFormatOk(g_srcFmt)) return;
     if (g_fitPending > 0) {
         if (--g_fitPending > 0) return;
         D3D11_MAPPED_SUBRESOURCE m;
@@ -730,16 +739,22 @@ static void fitScan(bool layout) {
         bool same = true;
         for (int i = 0; i < 4; i++) { int d = f[i] - g_fitCand[i]; if (d < -4 || d > 4) same = false; }
         if (same) g_fitCandHits++; else { g_fitCandHits = 1; for (int i = 0; i < 4; i++) g_fitCand[i] = f[i]; }
-        if (g_fitCandHits >= 2) {
+        // When a stage starts the text is still fading in, so its box changes a few times. Keep the
+        // box hidden until the same size has been seen for ~2 seconds (or 3 seconds have passed),
+        // then show it once; after that a change needs several matching scans.
+        bool show = g_fitShown || g_fitCandHits >= 20 || (g_fitWait >= 120 && g_fitCandHits >= 2);
+        if (show && g_fitCandHits >= (g_fitShown ? 4 : 2)) {
             EnterCriticalSection(&g_lock);
             for (int i = 0; i < 4; i++) g_fit[i] = g_fitCand[i];
             g_fitValid = true;
+            g_fitShown = true;
             g_fitIdx = g_fitRect;
             LeaveCriticalSection(&g_lock);
         }
         return;
     }
-    if (++tick < 15) return;
+    if (!g_fitShown) g_fitWait++;
+    if (++tick < (g_fitShown ? 15 : 4)) return;  // every 4 frames while waiting to show the box
     tick = 0;
     if (g_fitRect >= g_numRects) return;
     if (!g_fitStage || g_fitFmt != g_srcFmt) {
@@ -868,37 +883,50 @@ static int buildQuads(Vtx* v, bool layout, int* bgVerts) {
             if (r.dy <= 2) noTop = true;
             if (r.dy + r.dh >= g_canH - 2) noBottom = true;
             if (i > 0 && i == g_fitRect) {
-                // zoom the found text (plus a margin) to fill the box, keeping its shape, centered
-                if (g_fitValid && g_fitIdx == i) {
+                if (g_fitValid && g_fitIdx == i && g_fitShown) {
+                    // zoom the found text (plus a margin) to fill its box, keeping its shape, then
+                    // fill the rest of the slot (top edge down to the playfield, out to the side
+                    // border) with the art around the text, so there's no floating box
                     int px = 12, py = 6;
-                    int fx0 = g_fit[0] - px, fy0 = g_fit[1] - py, fx1 = g_fit[2] + px, fy1 = g_fit[3] + py;
-                    if (fx0 < r.sx) fx0 = r.sx;
-                    if (fy0 < r.sy) fy0 = r.sy;
-                    if (fx1 > r.sx + r.sw) fx1 = r.sx + r.sw;
-                    if (fy1 > r.sy + r.sh) fy1 = r.sy + r.sh;
-                    if (fx1 - fx0 > 8 && fy1 - fy0 > 8) {
-                        // extra art around the text, so the edge fades don't dim the letters
-                        // (stays above the Hi-score label underneath the search area)
-                        float z0 = (float)r.dw / (fx1 - fx0);
-                        if ((float)r.dh / (fy1 - fy0) < z0) z0 = (float)r.dh / (fy1 - fy0);
-                        int padX = (int)((r.fx > 0 ? r.fx : g_featherX) / z0);
-                        int padY = (int)((r.fy > 0 ? r.fy : g_featherY) / z0);
-                        fx0 -= padX; fx1 += padX; fy0 -= padY; fy1 += padY;
-                        if (fx0 < r.sx - 60) fx0 = r.sx - 60;
-                        if (fx1 > r.sx + r.sw + 60) fx1 = r.sx + r.sw + 60;
-                        if (fy0 < 0) fy0 = 0;
-                        if (fy1 > r.sy + r.sh + 20) fy1 = r.sy + r.sh + 20;
-                        r.sx = fx0; r.sy = fy0; r.sw = fx1 - fx0; r.sh = fy1 - fy0;
+                    float t0x = (float)g_fit[0] - px, t0y = (float)g_fit[1] - py;
+                    float t1x = (float)g_fit[2] + px, t1y = (float)g_fit[3] + py;
+                    float z = r.dw / (t1x - t0x);
+                    if (r.dh / (t1y - t0y) < z) z = r.dh / (t1y - t0y);
+                    float tw = (t1x - t0x) * z, th = (t1y - t0y) * z;
+                    float tdx = r.dx + (r.dw - tw) * 0.5f, tdy = r.dy + (r.dh - th) * 0.5f;
+                    // slot
+                    float sx0 = (float)r.dx, sx1 = (float)(r.dx + r.dw);
+                    if (sx1 >= g_canW - 12) sx1 = (float)g_canW;
+                    float sy0 = r.dy <= 12 ? 0.0f : (float)r.dy, sy1 = (float)(r.dy + r.dh);
+                    if (pfTop >= sy1 && pfTop - sy1 <= 12) sy1 = (float)pfTop;
+                    // same zoom sideways; slide the source window if it would leave the right panel
+                    float a0 = t0x - (tdx - sx0) / z, a1 = t1x + (sx1 - tdx - tw) / z;
+                    float lo = (float)(r.sx - 60), hi = (float)(r.sx + r.sw + 80);
+                    if (a1 > hi) { a0 -= a1 - hi; a1 = hi; }
+                    if (a0 < lo) { a1 += lo - a0; a0 = lo; if (a1 > hi) a1 = hi; }
+                    // art above and below the text: natural size when there's room, otherwise
+                    // stretched a little; never below the search area (the Hi-score label)
+                    float topSrc = t0y - (tdy - sy0) / z;            if (topSrc < 0) topSrc = 0;
+                    float botLim = (float)(r.sy + r.sh + 18);
+                    float botSrc = t1y + (sy1 - tdy - th) / z;       if (botSrc > botLim) botSrc = botLim;
+                    if (t1y > botLim) { t1y = botLim; botSrc = botLim; }
+                    // short fade on the side facing the other boxes, kept off the letters
+                    float fade = (float)(r.fx > 0 ? r.fx : g_featherX);
+                    float room = tdx - sx0 + px * z * 0.5f;
+                    if (fade > room) fade = room;
+                    if (fade < 6) fade = 6;
+                    bool nl = sx0 <= 2, nr = sx1 >= g_canW - 2;
+                    float u0 = tx0 + tsx * a0 / g_refW, u1 = tx0 + tsx * a1 / g_refW;
+                    float ys[4]  = { sy0, tdy, tdy + th, sy1 };
+                    float vs[4]  = { topSrc, t0y, t1y, botSrc };
+                    for (int b = 0; b < 3; b++) {
+                        if (ys[b + 1] - ys[b] < 0.5f) continue;
+                        n = pushQuad(v, n, u0, ty0 + tsy * vs[b] / g_refH, u1, ty0 + tsy * vs[b + 1] / g_refH,
+                                     ox + sx0 * k, oy + ys[b] * k, (sx1 - sx0) * k, (ys[b + 1] - ys[b]) * k,
+                                     fade * k, 0, true, true, nl, nr);
                     }
                 }
-                float z = (float)r.dw / r.sw;
-                if ((float)r.dh / r.sh < z) z = (float)r.dh / r.sh;
-                int w = (int)(r.sw * z), h = (int)(r.sh * z);
-                r.dx += (r.dw - w) / 2; r.dy += (r.dh - h) / 2; r.dw = w; r.dh = h;
-                // the zoomed box can end up anywhere inside its slot: always fade its bottom,
-                // other edges only skip the fade when they still sit on the layout's border
-                noBottom = false;
-                noTop = r.dy <= 2; noLeft = r.dx <= 2; noRight = r.dx + r.dw >= g_canW - 2;
+                continue;  // not found yet: leave the slot to the background
             }
             n = pushQuad(v, n,
                          tx0 + tsx * r.sx / g_refW, ty0 + tsy * r.sy / g_refH,
